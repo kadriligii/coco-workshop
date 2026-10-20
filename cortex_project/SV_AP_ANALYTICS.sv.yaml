@@ -1,0 +1,333 @@
+name: SV_AP_ANALYTICS
+description: Accounts payable (AP) invoice analytics over curated Silver invoices from SAP, Oracle, Baan
+  (EMEA) and Workday (Americas + London). Grain is one row per invoice. Amounts are in the original transaction
+  currency (no FX conversion). The data contains approval status but NO payment status or paid date.
+tables:
+- name: AP_INVOICES
+  description: One row per AP invoice (current state). invoice_key is unique across all source systems.
+    Amounts are in currency_code; never add amounts across currencies.
+  base_table:
+    database: COCO_WORKSHOP
+    schema: PIPELINE_LAB
+    table: SILVER_AP_INVOICES
+  primary_key:
+    columns:
+    - INVOICE_KEY
+  dimensions:
+  - name: INVOICE_KEY
+    expr: INVOICE_KEY
+    data_type: VARCHAR
+    description: Unique invoice identifier across systems, formatted SOURCE|source_invoice_id.
+    unique: true
+  - name: INVOICE_NUMBER
+    synonyms:
+    - 'invoice #'
+    - invoice ref
+    - invoice reference
+    - document number
+    expr: INVOICE_NUMBER
+    data_type: VARCHAR
+    description: Business-facing invoice number used in lookups; unique within a source system.
+  - name: SOURCE_INVOICE_ID
+    expr: SOURCE_INVOICE_ID
+    data_type: VARCHAR
+    description: Invoice ID as issued by the source ERP (e.g. BAN-001, WD-001). Unique only within its
+      source system; use INVOICE_KEY for a cross-system unique ID.
+  - name: SOURCE_SYSTEM
+    synonyms:
+    - ERP
+    - source
+    - system
+    - ERP system
+    expr: SOURCE_SYSTEM
+    data_type: VARCHAR
+    description: Source ERP. BAAN = EMEA (Netherlands, UK); WORKDAY = Americas plus London entity.
+    is_enum: true
+    sample_values:
+    - SAP
+    - ORACLE
+    - BAAN
+    - WORKDAY
+  - name: VENDOR_KEY
+    synonyms:
+    - vendor identifier
+    - supplier key
+    expr: SOURCE_SYSTEM || '|' || VENDOR_ID
+    data_type: VARCHAR
+    description: Vendor identifier unique across systems (SOURCE|vendor_id). Use this to group by vendor.
+      The same real-world vendor in two ERPs appears as two vendor keys; vendors are not matched across
+      systems.
+  - name: VENDOR_ID
+    expr: VENDOR_ID
+    data_type: VARCHAR
+    description: Vendor ID as issued by the source ERP; only unique within one source system.
+  - name: VENDOR_NAME
+    synonyms:
+    - supplier
+    - supplier name
+    - payee
+    - vendor
+    expr: VENDOR_NAME
+    data_type: VARCHAR
+    description: Vendor display name from the source ERP. Names may contain accented characters (European
+      vendors) and are not de-duplicated across systems.
+  - name: COST_CENTER
+    synonyms:
+    - business unit
+    - BU
+    - department
+    - cost centre
+    expr: SOURCE_COST_CENTER
+    data_type: VARCHAR
+    description: Source cost center code (e.g. BC-MFG, CC-ENG-01, WCC-TECH), used as the business unit.
+      Codes are raw per source system and not mapped across systems.
+  - name: GL_ACCOUNT
+    synonyms:
+    - general ledger account
+    - ledger account
+    - GL code
+    expr: SOURCE_GL_ACCOUNT
+    data_type: VARCHAR
+    description: Raw GL account code from the source ERP; formats differ by system and are not cross-mapped.
+  - name: CURRENCY_CODE
+    synonyms:
+    - currency
+    - ccy
+    expr: CURRENCY_CODE
+    data_type: VARCHAR
+    description: ISO 4217 transaction currency of invoice_amount.
+    is_enum: true
+    sample_values:
+    - USD
+    - EUR
+    - GBP
+  - name: APPROVAL_STATUS
+    synonyms:
+    - status
+    - invoice status
+    - approval state
+    expr: APPROVAL_STATUS
+    data_type: VARCHAR
+    description: Normalized approval status. APPROVED includes posted/validated invoices; PENDING includes
+      in-review invoices. This is NOT payment status.
+    is_enum: true
+    sample_values:
+    - APPROVED
+    - PENDING
+  - name: SOURCE_STATUS
+    expr: SOURCE_STATUS
+    data_type: VARCHAR
+    description: Raw status value from the source ERP (e.g. POSTED, VALIDATED, In Review). Prefer APPROVAL_STATUS
+      unless the raw value is requested.
+  - name: PAYMENT_TERMS
+    synonyms:
+    - terms
+    - net terms
+    - net days
+    expr: PAYMENT_TERMS
+    data_type: VARCHAR
+    description: Payment terms normalized across ERPs (N30, Net 30 -> NET30; N60, Net 60 -> NET60). Raw
+      source value is not exposed in this view.
+    is_enum: true
+    sample_values:
+    - NET30
+    - NET60
+  - name: PO_NUMBER
+    synonyms:
+    - purchase order
+    - PO
+    expr: PO_NUMBER
+    data_type: VARCHAR
+    description: Purchase order reference; may be NULL for service invoices.
+  - name: DESCRIPTION
+    synonyms:
+    - memo
+    - line description
+    expr: DESCRIPTION
+    data_type: VARCHAR
+    description: Free-text invoice line description; may be in Dutch for Baan invoices.
+  time_dimensions:
+  - name: INVOICE_DATE
+    synonyms:
+    - billing date
+    - date
+    expr: INVOICE_DATE
+    data_type: DATE
+    description: Date on the invoice. Default time dimension for spend and count over time.
+  - name: INVOICE_MONTH
+    synonyms:
+    - month
+    - invoice month
+    expr: DATE_TRUNC('MONTH', INVOICE_DATE)
+    data_type: DATE
+    description: First day of the invoice month (DATE_TRUNC of INVOICE_DATE). Use for monthly trends of
+      spend and invoice counts.
+  - name: DUE_DATE
+    synonyms:
+    - payment due date
+    - due
+    expr: DUE_DATE
+    data_type: DATE
+    description: Date payment is due. Does not indicate whether the invoice has been paid.
+  - name: SOURCE_CREATED_AT
+    expr: SOURCE_CREATED_AT
+    data_type: TIMESTAMP_NTZ
+    description: When the invoice record was created in the source ERP (UTC).
+  facts:
+  - name: INVOICE_AMOUNT
+    synonyms:
+    - amount
+    - invoice value
+    expr: INVOICE_AMOUNT
+    data_type: NUMBER
+    description: Gross invoice amount in currency_code. Not FX-converted.
+  metrics:
+  - name: TOTAL_AP_SPEND
+    synonyms:
+    - AP spend
+    - total spend
+    - total invoice amount
+    - spend
+    expr: SUM(INVOICE_AMOUNT)
+    description: Sum of gross invoice amounts in original transaction currency. Only meaningful when grouped
+      or filtered by CURRENCY_CODE.
+  - name: INVOICE_COUNT
+    synonyms:
+    - number of invoices
+    - invoice volume
+    - count of invoices
+    expr: COUNT(INVOICE_KEY)
+    description: Number of invoices (one row per invoice). Safe to sum across currencies and source systems.
+  - name: AVG_INVOICE_AMOUNT
+    synonyms:
+    - average invoice
+    - mean invoice amount
+    expr: AVG(INVOICE_AMOUNT)
+    description: Average gross invoice amount in original transaction currency. Only meaningful when grouped
+      or filtered by CURRENCY_CODE.
+  - name: VENDOR_COUNT
+    synonyms:
+    - number of vendors
+    - supplier count
+    expr: COUNT(DISTINCT SOURCE_SYSTEM || '|' || VENDOR_ID)
+    description: Number of distinct vendors, counted per source system (SOURCE_SYSTEM|VENDOR_ID). The
+      same real vendor in two ERPs counts twice.
+  - name: PENDING_APPROVAL_AMOUNT
+    synonyms:
+    - pending amount
+    - unapproved amount
+    - awaiting approval amount
+    expr: SUM(CASE WHEN APPROVAL_STATUS = 'PENDING' THEN INVOICE_AMOUNT END)
+    description: Amount of invoices still pending approval, in original currency. Closest available proxy
+      when users ask about unpaid or open invoices; it is not payment status.
+  - name: PENDING_APPROVAL_COUNT
+    synonyms:
+    - pending invoices
+    - invoices awaiting approval
+    expr: COUNT(CASE WHEN APPROVAL_STATUS = 'PENDING' THEN INVOICE_KEY END)
+    description: Number of invoices with APPROVAL_STATUS = PENDING. Proxy for open/unpaid invoices; payment
+      status is not available.
+  filters:
+  - name: PENDING_APPROVAL
+    synonyms:
+    - pending
+    - in review
+    - not approved
+    expr: APPROVAL_STATUS = 'PENDING'
+    description: Invoices still pending approval.
+  - name: LAST_12_MONTHS
+    synonyms:
+    - last 12 months
+    - trailing twelve months
+    - past year
+    - TTM
+    expr: INVOICE_DATE >= DATEADD('MONTH', -12, CURRENT_DATE)
+    description: Invoices dated within the 12 months before today.
+  - name: DUE_NEXT_30_DAYS
+    synonyms:
+    - due soon
+    - due in next 30 days
+    expr: DUE_DATE BETWEEN CURRENT_DATE AND DATEADD('DAY', 30, CURRENT_DATE)
+    description: Invoices with a due date in the next 30 days.
+module_custom_instructions:
+  sql_generation: 'Never sum or average invoice_amount across currencies: always include CURRENCY_CODE
+    in GROUP BY for amount metrics, and rank within each currency. When grouping by VENDOR_KEY, also return
+    VENDOR_NAME and SOURCE_SYSTEM. There is no payment status in this data: for "unpaid", "open" or "outstanding"
+    requests use APPROVAL_STATUS = ''PENDING'' and label the result as "pending approval (payment status
+    not available)". Interpret relative date ranges against CURRENT_DATE using INVOICE_DATE unless the
+    user names due date.'
+verified_queries:
+- name: spend_by_vendor_last_12m
+  question: What is total AP spend by vendor over the last 12 months?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  use_as_onboarding_question: true
+  sql: SELECT vendor_key, vendor_name, source_system, currency_code, SUM(invoice_amount) AS total_ap_spend
+    FROM __ap_invoices WHERE invoice_date >= DATEADD('MONTH', -12, CURRENT_DATE) GROUP BY vendor_key,
+    vendor_name, source_system, currency_code ORDER BY currency_code, total_ap_spend DESC
+- name: invoice_count_by_month_cost_center
+  question: Show invoice count by month and business unit.
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  use_as_onboarding_question: true
+  sql: SELECT DATE_TRUNC('MONTH', invoice_date) AS invoice_month, cost_center, COUNT(invoice_key) AS invoice_count
+    FROM __ap_invoices GROUP BY DATE_TRUNC('MONTH', invoice_date), cost_center ORDER BY invoice_month,
+    cost_center
+- name: top10_vendors_pending_amount
+  question: Who are the top 10 vendors by unpaid invoice amount?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  use_as_onboarding_question: true
+  sql: SELECT vendor_key, vendor_name, source_system, currency_code, SUM(invoice_amount) AS pending_approval_amount
+    FROM __ap_invoices WHERE approval_status = 'PENDING' GROUP BY vendor_key, vendor_name, source_system,
+    currency_code QUALIFY ROW_NUMBER() OVER (PARTITION BY currency_code ORDER BY SUM(invoice_amount) DESC)
+    <= 10 ORDER BY currency_code, pending_approval_amount DESC
+- name: pending_by_source_system
+  question: How many invoices are pending approval by source system?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT source_system, currency_code, COUNT(invoice_key) AS pending_approval_count, SUM(invoice_amount)
+    AS pending_approval_amount FROM __ap_invoices WHERE approval_status = 'PENDING' GROUP BY source_system,
+    currency_code ORDER BY source_system, currency_code
+- name: spend_by_source_currency
+  question: What is total AP spend and invoice count by source system and currency?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT source_system, currency_code, COUNT(invoice_key) AS invoice_count, SUM(invoice_amount) AS
+    total_ap_spend FROM __ap_invoices GROUP BY source_system, currency_code ORDER BY source_system, currency_code
+- name: monthly_spend_by_currency
+  question: What is monthly AP spend by currency?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT DATE_TRUNC('MONTH', invoice_date) AS invoice_month, currency_code, SUM(invoice_amount) AS
+    total_ap_spend FROM __ap_invoices GROUP BY DATE_TRUNC('MONTH', invoice_date), currency_code ORDER
+    BY invoice_month, currency_code
+- name: invoice_lookup
+  question: Show details for invoice BN-2025-1003.
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT invoice_number, source_system, vendor_name, invoice_date, due_date, invoice_amount, currency_code,
+    approval_status, payment_terms, po_number, gl_account, cost_center FROM __ap_invoices WHERE invoice_number
+    = 'BN-2025-1003'
+- name: invoices_due_next_30_days
+  question: Which invoices are due in the next 30 days?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT invoice_number, vendor_name, source_system, due_date, invoice_amount, currency_code, approval_status
+    FROM __ap_invoices WHERE due_date BETWEEN CURRENT_DATE AND DATEADD('DAY', 30, CURRENT_DATE) ORDER
+    BY due_date
+- name: pending_by_cost_center
+  question: What is the amount pending approval by business unit?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT cost_center, source_system, currency_code, COUNT(invoice_key) AS pending_approval_count,
+    SUM(invoice_amount) AS pending_approval_amount FROM __ap_invoices WHERE approval_status = 'PENDING'
+    GROUP BY cost_center, source_system, currency_code ORDER BY currency_code, pending_approval_amount
+    DESC
+- name: vendor_count_avg_by_source
+  question: How many vendors and what is the average invoice amount by source system and currency?
+  verified_at: 1792454400
+  verified_by: coco-workshop
+  sql: SELECT source_system, currency_code, COUNT(DISTINCT vendor_key) AS vendor_count, AVG(invoice_amount)
+    AS avg_invoice_amount FROM __ap_invoices GROUP BY source_system, currency_code ORDER BY source_system,
+    currency_code
